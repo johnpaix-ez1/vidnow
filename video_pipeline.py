@@ -1017,119 +1017,169 @@ async def main():
 
     print(f"Media directory {all_media_dir} check passed. Found content.")
 
-    # --- Initialize variables for voiceover/script/title handling ---
+    # 2. Pre-flight Check for videoscript.json
+    print("Checking for script in videoscript.json...")
+    # script_json_path is defined globally/earlier in 'main' in the actual full script,
+    # but for this subtask, ensure it's defined if running standalone or add it.
+    # For the purpose of this subtask, let's assume script_json_path is defined earlier in main
+    # like: script_json_path = "/home/ubuntu/crewgooglegemini/manVidspro/videoscript.json"
+    # (If it's not, the subtask should add its definition here based on the plan)
+    # Let's ensure it's defined for robustness of this subtask instruction:
+    script_json_path = "/home/ubuntu/crewgooglegemini/manVidspro/videoscript.json"
+
+    title_from_json = None # Initialize
+    script_from_json = None # Initialize
+
+    if not os.path.exists(script_json_path):
+        print(f"Error: Script JSON file not found at {script_json_path}.")
+        print("Please create this file, ensure it contains a 'script' field (and optionally 'title'), and then re-run.")
+        return # Stop execution
+
+    try:
+        with open(script_json_path, 'r', encoding='utf-8') as f_json:
+            data = json.load(f_json)
+
+        if not isinstance(data, dict):
+            print(f"Error: Content of {script_json_path} is not a valid JSON object (dictionary). It should be like {{'title': 'T', 'script': 'S'}}.")
+            return # Stop execution
+
+        script_from_json = data.get("script")
+        # title_from_json = data.get("title") # Title from JSON will not be used as per latest user feedback (title always prompted)
+                                            # but it's good to load it if it exists for potential future use or logging.
+        if data.get("title"):
+            title_from_json = data.get("title") # Store it if present
+
+        if not script_from_json or not isinstance(script_from_json, str) or not script_from_json.strip():
+            print(f"Error: The 'script' field in {script_json_path} is missing, empty, or not a string.")
+            print("Please ensure videoscript.json contains a valid, non-empty 'script'.")
+            # script_from_json = None # Not needed, as we return
+            return # Stop execution
+
+        print(f"Successfully loaded script from {script_json_path} (length: {len(script_from_json)}).")
+        if title_from_json:
+            print(f"  (Note: Title found in JSON: '{title_from_json}'. User will still be prompted for title to confirm/override.)")
+        else:
+            print(f"  (Note: No 'title' field found in JSON. User will be prompted for title.)")
+
+
+    except json.JSONDecodeError:
+        print(f"Error: Could not decode JSON from {script_json_path}. Please ensure it's valid JSON (e.g., {{'title': 'T', 'script': 'S'}}).")
+        return # Stop execution
+    except Exception as e:
+        print(f"An unexpected error occurred while reading {script_json_path}: {e}")
+        return # Stop execution
+
+    # At this point, script_from_json holds the valid script from the JSON file.
+    # The main 'script' variable for the pipeline will be assigned this value later.
+    # 'title_from_json' is also available but user will be prompted for title.
+
+    # --- Get Video Title (Always prompt as per user feedback) ---
+    print("\n--- Video Title ---")
+    # video_title variable should be initialized to None earlier in main, e.g. where script_from_json is.
+    # For this subtask, let's ensure it's handled here.
+    # If title_from_json was loaded, we can inform the user but still prompt.
+
+    # Re-initialize video_title here to ensure it's from the prompt for this run.
+    # The 'video_title' variable used throughout the rest of the script will be this one.
+    video_title = None
+
+    if title_from_json: # title_from_json was loaded in the previous step
+        print(f"A title ('{title_from_json}') was found in videoscript.json.")
+        print("You will now be prompted to confirm or provide the title for this run.")
+
+    video_title_input_prompt = "Enter the video title for this run: "
+    video_title = input(video_title_input_prompt).strip()
+    while not video_title: # Ensure a title is provided
+        print("Video title cannot be empty.")
+        video_title = input(video_title_input_prompt).strip()
+
+    print(f"Video title for this run set to: '{video_title}'")
+
+    # Now, 'video_title' holds the user-confirmed title for this session.
+    # 'script_from_json' holds the script from the JSON file.
+    # 'script' variable for the pipeline will be set using script_from_json later.
+
+    # 'title_from_json' is also available but user will be prompted for title.
+
+    # --- Get Video Title (Always prompt as per user feedback) ---
+    # This block was inserted by subtask 23.
+    # The 'video_title' variable used throughout the rest of the script will be this one.
+    # 'script_from_json' holds the script from the JSON file (from pre-flight check #2).
+    # 'title_from_json' is also available from pre-flight check #2.
+
+    # The script for the current run is now definitively script_from_json
+    script = script_from_json
+
+    # --- Initialize (or re-initialize) tts_output_path and use_existing_voiceover ---
+    # These were potentially set by a previous "Existing Voiceover Check" logic,
+    # but that old logic is being replaced/restructured by this current subtask.
+    # The new "Existing Voiceover Check" (Step 3 of the plan) comes *after* title and script are determined.
     tts_output_path = None
-    video_title = None # Will be populated either from voiceover filename/JSON or user prompt
-    script = ""        # Will be populated either from JSON or user prompt
     use_existing_voiceover = False
 
-    # 2. Check for existing voiceover
-    kokoro_voiceover_dir = "/home/ubuntu/crewgooglegemini/manVidspro/kokoroVoiceover" # User specified
-    script_json_path = "/home/ubuntu/crewgooglegemini/manVidspro/videoscript.json" # User specified
 
-    print(f"Checking for existing voiceover in: {kokoro_voiceover_dir}")
+    # --- (New Step 3 from plan) Existing Voiceover Check ---
+    # This check now happens *after* title is prompted and script is loaded from JSON.
+    # It decides if we can use an old audio file OR if we must generate a new one.
+    # The key here is that `video_title` (from prompt) and `script` (from JSON) are now fixed for this run.
+
+    kokoro_voiceover_dir = "/home/ubuntu/crewgooglegemini/manVidspro/kokoroVoiceover" # User specified
+    print(f"\nChecking for existing voiceover in: {kokoro_voiceover_dir}...")
+
     potential_voiceovers = []
     if os.path.exists(kokoro_voiceover_dir) and os.path.isdir(kokoro_voiceover_dir):
-        audio_extensions = ('.wav', '.mp3', '.aac', '.ogg', '.flac') # Common audio types
+        audio_extensions = ('.wav', '.mp3', '.aac', '.ogg', '.flac')
         for item in os.listdir(kokoro_voiceover_dir):
             item_path = os.path.join(kokoro_voiceover_dir, item)
             if os.path.isfile(item_path) and item.lower().endswith(audio_extensions):
+                # Simple heuristic: if a voiceover filename (without extension) contains
+                # a sanitized version of the current video_title, it's a candidate.
+                # This is imperfect but better than just picking the newest unrelated file.
+                # User might need to manage this folder carefully or use a more robust matching system.
+                # For now, we just check if any audio exists and pick newest if user confirms.
                 potential_voiceovers.append(item_path)
 
     if potential_voiceovers:
-        if len(potential_voiceovers) > 1:
-            print(f"Multiple voiceover files found. Selecting the most recent.")
-            # Sort by modification time (newest first)
-            potential_voiceovers.sort(key=lambda f: os.path.getmtime(f), reverse=True)
+        print(f"Found {len(potential_voiceovers)} audio file(s) in the voiceover directory.")
+        # Sort by modification time (newest first) to present the most recent ones first
+        potential_voiceovers.sort(key=lambda f: os.path.getmtime(f), reverse=True)
+        print("Available files (newest first):")
+        for i, vo_path in enumerate(potential_voiceovers):
+            # Using datetime for more readable timestamp - ensure datetime is imported if this line is kept long-term
+            # from datetime import datetime # Would be needed at top of file
+            # For now, just path:
+            print(f"  {i+1}: {os.path.basename(vo_path)} (modified: {os.path.getmtime(vo_path)})")
 
-        tts_output_path = potential_voiceovers[0] # Most recent or the only one
-        use_existing_voiceover = True
-        print(f"Using existing voiceover: {tts_output_path}")
-
-        # Attempt to parse video_title from filename (e.g., "My Title_voiceover.wav" or "My Title.wav")
-        base_vo_filename = os.path.splitext(os.path.basename(tts_output_path))[0]
-        if base_vo_filename.lower().endswith("_voiceover"):
-            video_title_from_vo = base_vo_filename[:-10].strip() # Remove "_voiceover"
-        else:
-            video_title_from_vo = base_vo_filename.strip()
-
-        if video_title_from_vo:
-            print(f"Attempting to use title from voiceover filename: '{video_title_from_vo}'")
-            # Further check: Load script_json_path to see if this title exists
-            if os.path.exists(script_json_path):
-                try:
-                    with open(script_json_path, 'r', encoding='utf-8') as f_json:
-                        all_scripts_data = json.load(f_json) # Assuming it's a dict of dicts or list of dicts
-
-                    # Assuming structure is {"title1": {"script": "..."}} or a list [{"title":"..", "script":"..."}]
-                    # For simplicity, let's assume it's a dictionary where keys are titles.
-                    # If it's a list, this logic needs adjustment.
-                    # User mentioned "video title and script in one block" for videoscript.json
-                    # Let's assume it's a single JSON object: {"title": "the_title", "script": "the_script"}
-                    # This was from step 1 of this plan. So, the JSON path contains ONE title/script.
-                    # This means we should check if video_title_from_vo matches the title in that JSON.
-
-                    # Re-evaluating: script_json_path as per step 1 was:
-                    # script_data_to_save = {"title": video_title, "script": script}
-                    # This implies script_json_path stores info for ONE video, the *last* one.
-                    # This is not a database of all scripts.
-                    # So, if an old voiceover is found, its title might not be in this specific JSON file
-                    # unless it was the very last video processed.
-
-                    # New refined logic:
-                    # The JSON file /home/ubuntu/crewgooglegemini/manVidspro/videoscript.json
-                    # is expected to contain {"title": "actual_title", "script": "actual_script"}
-                    # that corresponds to the LATEST run that saved this file.
-                    # If an old voiceover is picked, its title might not match the one in this JSON.
-
-                    # Simpler approach for now: If title is parsed from voiceover, use it.
-                    # If script for this title can be found (e.g. from a text file named video_title_from_vo_script.txt
-                    # in the voiceover dir, or if videoscript.json was a DICTIONARY of scripts keyed by title),
-                    # then use it. Otherwise, script will be empty or prompted.
-                    # For now, let's assume script_json_path might contain the relevant script if titles match.
-
-                    script_data = None # Initialize script_data
-                    if os.path.exists(script_json_path): # Check if script_json_path exists before opening
-                        with open(script_json_path, 'r', encoding='utf-8') as f_json:
-                            try:
-                                script_data_from_file = json.load(f_json)
-                                # Check if the title from file matches the parsed title
-                                if isinstance(script_data_from_file, dict) and script_data_from_file.get('title') == video_title_from_vo:
-                                    script = script_data_from_file.get('script', "")
-                                    video_title = video_title_from_vo # Confirm title
-                                    print(f"Found matching script for title '{video_title}' in {script_json_path}")
-                                else:
-                                    print(f"Title '{video_title_from_vo}' from voiceover filename does not match title in {script_json_path}. Script not loaded from JSON.")
-                                    video_title = video_title_from_vo # Still use title from filename
-                                    # Script remains empty, will be prompted or handled later
-                            except json.JSONDecodeError:
-                                print(f"Warning: Could not decode JSON from {script_json_path}. Script not loaded.")
-                    else: # script_json_path does not exist
-                        print(f"Warning: Script JSON file {script_json_path} not found. Script not loaded.")
-                        video_title = video_title_from_vo # Still use title from filename
-
-                except Exception as e_json:
-                    print(f"Error reading script JSON {script_json_path}: {e_json}")
-                    video_title = video_title_from_vo # Fallback to title from filename
-                    # Script remains empty
-            else: # video_title_from_vo was empty
-                print("Could not parse a valid title from the voiceover filename.")
-                # video_title will be prompted later
-                # script will be prompted later (if new VO) or remain empty (if existing VO and no script found)
-        else: # No voiceover files found
-            print("No existing voiceover files found.")
-            use_existing_voiceover = False
-            # video_title and script will be prompted as per normal flow for new video
-    else: # kokoro_voiceover_dir does not exist or is not a directory
-        print(f"Voiceover directory {kokoro_voiceover_dir} not found or is not a directory.")
+        # Ask user if they want to use one of these or generate a new one
+        while True:
+            user_choice = input(f"Use an existing voiceover (enter number 1-{len(potential_voiceovers)}), or 'N' to generate new? (N): ").strip().lower()
+            if not user_choice or user_choice == 'n':
+                use_existing_voiceover = False
+                tts_output_path = None # Ensure it's reset
+                print("Proceeding to generate a new voiceover.")
+                break
+            try:
+                choice_idx = int(user_choice) - 1
+                if 0 <= choice_idx < len(potential_voiceovers):
+                    tts_output_path = potential_voiceovers[choice_idx]
+                    use_existing_voiceover = True
+                    print(f"Selected existing voiceover: {tts_output_path}")
+                    # If using existing, the script from videoscript.json is still the master script.
+                    # The title is what the user just entered.
+                    print(f"This voiceover will be used for video titled '{video_title}' with script from videoscript.json.")
+                    break
+                else:
+                    print(f"Invalid number. Please choose from 1 to {len(potential_voiceovers)} or 'N'.")
+            except ValueError:
+                print("Invalid input. Please enter a number or 'N'.")
+    else:
+        print(f"No existing voiceover files found in {kokoro_voiceover_dir}.")
         use_existing_voiceover = False
-        # video_title and script will be prompted as per normal flow for new video
+        print(f"A new voiceover will be generated using the script from videoscript.json for title '{video_title}'.")
 
-    # --- Get Video Resolution (this part can remain largely unchanged, happens for both paths) ---
+    # --- Get Video Resolution (moved here, happens for both paths) ---
     print("\n--- Video Configuration ---")
     while True:
-        # This print statement was removed in a previous subtask run. Let's ensure it's here or similar.
-        # print("Starting the video production pipeline...") # This was an old print, let's use a more contextual one.
         print("\nChoose video resolution:")
         print("1: 720x1280 (Portrait)")
         print("2: 1280x720 (Landscape)")
@@ -1144,69 +1194,24 @@ async def main():
             print("Invalid choice. Please enter 1 or 2.")
     print(f"Selected resolution: {resolution}")
 
-
-    # --- Conditional Handling for Title, Script, and TTS ---
-    if use_existing_voiceover:
-        print(f"Proceeding with existing voiceover: {tts_output_path}")
-
-        if not video_title: # If title wasn't parsed from filename or is empty
-            print("Could not determine video title from existing voiceover filename or JSON.")
-            video_title = input("Please enter the video title: ").strip()
-            while not video_title: # Ensure a title is provided
-                print("Video title cannot be empty.")
-                video_title = input("Please enter the video title: ").strip()
-            print(f"Video title set to: {video_title}")
-        else:
-            print(f"Using video title: '{video_title}' (from voiceover filename/JSON).")
-
-
-        if not script: # If script wasn't loaded from JSON or is empty for the given title
-            print(f"No script was found or loaded for title '{video_title}' from {script_json_path}.")
-            # Option: Prompt for a script/description, or use a placeholder.
-            # Using a placeholder as decided.
-            script = f"Script for video titled '{video_title}' (associated with existing voiceover: {os.path.basename(tts_output_path)})."
-            print(f"Using placeholder script: '{script[:100]}...'")
-        else:
-            print(f"Using script found for title '{video_title}'.")
-
-    else: # No existing voiceover to use - normal new video flow
-        print("No existing usable voiceover found. Proceeding with new script input.")
-
-        # Get video title (original placement for new video flow)
-        # video_title should be None or empty here if use_existing_voiceover is False
-        if video_title:
-             print(f"Warning: video_title ('{video_title}') was unexpectedly pre-set in new video flow. Will re-prompt.")
-
-        print("\nWhat is the title for this video?")
-        video_title = input("Enter video title: ").strip()
-        while not video_title: # Ensure a title is provided
-            print("Video title cannot be empty.")
-            video_title = input("Enter video title: ").strip()
-        print(f"Video title set to: {video_title}")
-
-        # Get video script
-        print("\nPaste your video script below. Press Ctrl+D (or Ctrl+Z on Windows) when done.")
-        script_lines = []
-        while True:
-            try:
-                line = input()
-                script_lines.append(line)
-            except EOFError:
-                break
-        script = "\n".join(script_lines)
-
-        if not script.strip():
-            print("Script input was empty. Exiting.")
+    # --- Conditional TTS Generation (if not using existing) ---
+    # 'script' variable is already set to script_from_json.
+    # 'video_title' is set from user prompt.
+    # 'tts_output_path' is set if use_existing_voiceover is True, otherwise it's None here.
+    if not use_existing_voiceover:
+        # Script is already loaded from script_from_json.
+        # Title is already set from user prompt.
+        if not script: # Should have been caught by pre-flight, but as a safeguard
+            print("Error: Script (from videoscript.json) is empty. Cannot generate new voiceover. Please check videoscript.json.")
             return
 
-        print(f"\n--- Video Script Received (length: {len(script)}) ---")
-        # print(script) # Optionally print full script for verification
-        print("--- End of Script ---")
+        print(f"Using script from videoscript.json (length: {len(script)}) for TTS.")
+        # print(script) # Optionally print script for verification
 
         # Process script with Kokoro TTS
         print("\nProcessing script with Kokoro TTS...")
-        # tts_output_path variable will be (re)assigned here
-        tts_output_path_or_error = await process_with_kokoro_tts(script)
+        tts_output_path_or_error = await process_with_kokoro_tts(script) # script is script_from_json
+
         if isinstance(tts_output_path_or_error, str) and os.path.exists(tts_output_path_or_error):
             tts_output_path = tts_output_path_or_error # Assign to the main tts_output_path
             print(f"Kokoro TTS processing complete. Output: {tts_output_path}")
@@ -1215,7 +1220,7 @@ async def main():
             print("Cannot proceed without a valid voiceover file.")
             return
 
-    # --- Ensure tts_output_path is valid before proceeding ---
+    # --- Ensure tts_output_path is valid before proceeding (either existing or newly generated) ---
     if not tts_output_path or not os.path.exists(tts_output_path):
         print(f"Error: Voiceover path '{tts_output_path}' is not valid or file does not exist. Cannot proceed.")
         return
@@ -1236,143 +1241,143 @@ async def main():
     # (e.g., get_audio_duration(tts_output_path), discover_and_prepare_media, etc.)
     voiceover_duration = get_audio_duration(tts_output_path)
     if voiceover_duration <= 0:
-            print("Error: Could not determine voiceover duration or voiceover is empty. Cannot proceed with video generation.")
-            return # Or handle error appropriately
+        print("Error: Could not determine voiceover duration or voiceover is empty. Cannot proceed with video generation.")
+        return # Or handle error appropriately
 
-        print(f"Voiceover duration: {voiceover_duration:.2f} seconds")
+    print(f"Voiceover duration: {voiceover_duration:.2f} seconds")
 
-        media_dir = "/home/ubuntu/crewgooglegemini/manVidspro/allMedia" # As specified by user
+    media_dir = "/home/ubuntu/crewgooglegemini/manVidspro/allMedia" # As specified by user
 
-        # Discover and prepare media
-        # The 'resolution' variable should be available from the user's earlier choice.
-        available_media = discover_and_prepare_media(media_dir, resolution)
+    # Discover and prepare media
+    # The 'resolution' variable should be available from the user's earlier choice.
+    available_media = discover_and_prepare_media(media_dir, resolution)
 
-        if not available_media:
-            print(f"No media found in {media_dir}. Cannot create video sequence.")
-            return
+    if not available_media:
+        print(f"No media found in {media_dir}. Cannot create video sequence.")
+        return
 
-        # Create the visual sequence of clips
-        print(f"Starting to create visual sequence for resolution: {resolution} and duration: {voiceover_duration:.2f}s")
-        visual_clips = create_visual_sequence(available_media, resolution, voiceover_duration)
+    # Create the visual sequence of clips
+    print(f"Starting to create visual sequence for resolution: {resolution} and duration: {voiceover_duration:.2f}s")
+    visual_clips = create_visual_sequence(available_media, resolution, voiceover_duration)
 
-        if not visual_clips:
-            print("Failed to create the visual sequence of clips.")
-            return
+    if not visual_clips:
+        print("Failed to create the visual sequence of clips.")
+        return
 
-        actual_visual_duration = sum(c.duration for c in visual_clips)
-        print(f"\n--- Visual Sequence Generation Complete ---")
-        print(f"Number of clips generated: {len(visual_clips)}")
-        print(f"Total duration of visual clips: {actual_visual_duration:.2f}s")
-        print(f"Target voiceover duration was: {voiceover_duration:.2f}s")
+    actual_visual_duration = sum(c.duration for c in visual_clips)
+    print(f"\n--- Visual Sequence Generation Complete ---")
+    print(f"Number of clips generated: {len(visual_clips)}")
+    print(f"Total duration of visual clips: {actual_visual_duration:.2f}s")
+    print(f"Target voiceover duration was: {voiceover_duration:.2f}s")
 
-        # --- Final Video Assembly ---
-        bgsounds_dir = "/home/ubuntu/crewgooglegemini/manVidspro/bgsounds" # User specified path
-        final_video_dir = "/home/ubuntu/crewgooglegemini/manVidspro/Finalvideo" # User specified path
+    # --- Final Video Assembly ---
+    bgsounds_dir = "/home/ubuntu/crewgooglegemini/manVidspro/bgsounds" # User specified path
+    final_video_dir = "/home/ubuntu/crewgooglegemini/manVidspro/Finalvideo" # User specified path
 
-        # Ensure output directory for final video exists
+    # Ensure output directory for final video exists
+    try:
+        os.makedirs(final_video_dir, exist_ok=True)
+    except OSError as e:
+        print(f"Error creating output directory {final_video_dir}: {e}")
+        # Depending on severity, might want to return or raise
+        return
+
+    # Prepare background sound
+    # voiceover_duration should be available from earlier in main()
+    background_audio = None # Initialize to None
+    if os.path.exists(bgsounds_dir) and os.listdir(bgsounds_dir): # Check if dir exists and is not empty
+        background_audio = prepare_background_sound(bgsounds_dir, voiceover_duration, volume_factor=0.08) # e.g., 8% volume
+    else:
+        print(f"Background sounds directory {bgsounds_dir} not found or is empty. Proceeding without background sound.")
+
+    # Sanitize video title for filename
+    # video_title variable should be available from earlier in main()
+    safe_video_filename = sanitize_filename(video_title) + ".mp4"
+    output_video_path = os.path.join(final_video_dir, safe_video_filename)
+
+    print(f"\nStarting final video assembly...")
+    print(f"Voiceover audio: {tts_output_path}")
+    if background_audio:
+        print(f"Background audio will be used.")
+    else:
+        print(f"No background audio will be used.")
+    print(f"Output video will be saved to: {output_video_path}")
+
+    success = finalize_video(
+        visual_clips=visual_clips,
+        voiceover_audio_path=tts_output_path,
+        background_audio_clip=background_audio,
+        output_path=output_video_path,
+        target_resolution_str=resolution # Pass the user's chosen resolution string
+        # Using default quality settings in finalize_video, can customize here if needed
+    )
+
+    if success:
+        print(f"\n--- Video Generation Successful ---")
+        print(f"Final video saved to: {output_video_path}")
+
+        # Save the Kokoro input script as a .txt file in the same directory as the video
+        # output_video_path should be defined and hold the full path to the .mp4 video
+        # video_title should hold the original user-provided title
+
+        # We need a sanitized version of video_title for the TXT filename,
+        # but the JSON and Google Drive upload might use the original or a differently sanitized one.
+        # Let's use the same sanitized name as the video for consistency for the TXT file.
+        # The output_video_path already uses a sanitized name from sanitize_filename(video_title) + ".mp4"
+
+        base_filename = os.path.splitext(os.path.basename(output_video_path))[0] # Extracts filename without .mp4
+        script_txt_filename = f"{base_filename}_script.txt"
+        script_txt_path = os.path.join(os.path.dirname(output_video_path), script_txt_filename)
+
         try:
-            os.makedirs(final_video_dir, exist_ok=True)
-        except OSError as e:
-            print(f"Error creating output directory {final_video_dir}: {e}")
-            # Depending on severity, might want to return or raise
-            return
+            with open(script_txt_path, 'w', encoding='utf-8') as f_txt:
+                f_txt.write(f"Title: {video_title}\n\nScript:\n{script}")
+            print(f"Saved Kokoro input script to TXT: {script_txt_path}")
+        except Exception as e:
+            print(f"Error saving script to TXT at {script_txt_path}: {e}")
 
-        # Prepare background sound
-        # voiceover_duration should be available from earlier in main()
-        background_audio = None # Initialize to None
-        if os.path.exists(bgsounds_dir) and os.listdir(bgsounds_dir): # Check if dir exists and is not empty
-            background_audio = prepare_background_sound(bgsounds_dir, voiceover_duration, volume_factor=0.08) # e.g., 8% volume
-        else:
-            print(f"Background sounds directory {bgsounds_dir} not found or is empty. Proceeding without background sound.")
+        # Now, proceed with uploads
+        print(f"\n--- Starting Upload Processes ---")
 
-        # Sanitize video title for filename
-        # video_title variable should be available from earlier in main()
-        safe_video_filename = sanitize_filename(video_title) + ".mp4"
-        output_video_path = os.path.join(final_video_dir, safe_video_filename)
+        # Ensure 'script' (Kokoro input) and 'video_title' (original) are available here.
+        # 'output_video_path' is the full path to the generated .mp4 file.
 
-        print(f"\nStarting final video assembly...")
-        print(f"Voiceover audio: {tts_output_path}")
-        if background_audio:
-            print(f"Background audio will be used.")
-        else:
-            print(f"No background audio will be used.")
-        print(f"Output video will be saved to: {output_video_path}")
+        # Call Telegram upload function (async)
+        # It's important that step_5f_send_to_telegram is defined as an async function
+        try:
+            print("\nAttempting to send to Telegram...")
+            await step_5f_send_to_telegram(
+                video_path=output_video_path,
+                video_title=video_title, # Original title for display
+                script_text=script      # Kokoro input script
+            )
+            print("Telegram sending process completed.")
+        except Exception as e_telegram:
+            print(f"An error occurred during Telegram sending: {e_telegram}")
 
-        success = finalize_video(
-            visual_clips=visual_clips,
-            voiceover_audio_path=tts_output_path,
-            background_audio_clip=background_audio,
-            output_path=output_video_path,
-            target_resolution_str=resolution # Pass the user's chosen resolution string
-            # Using default quality settings in finalize_video, can customize here if needed
-        )
+        # Call Google Drive upload function (synchronous)
+        try:
+            print("\nAttempting to upload to Google Drive...")
+            step_5g_upload_to_google_drive(
+                video_path=output_video_path,
+                video_title_original=video_title, # Original title for .txt content
+                script_text=script               # Kokoro input script
+            )
+            print("Google Drive upload process completed.")
+        except Exception as e_gdrive:
+            print(f"An error occurred during Google Drive upload: {e_gdrive}")
 
-        if success:
-            print(f"\n--- Video Generation Successful ---")
-            print(f"Final video saved to: {output_video_path}")
+        print(f"\n--- All Processes Attempted ---")
 
-            # Save the Kokoro input script as a .txt file in the same directory as the video
-            # output_video_path should be defined and hold the full path to the .mp4 video
-            # video_title should hold the original user-provided title
+    else:
+        print(f"\n--- Video Generation Failed ---")
+        print("Uploads will be skipped. Please check the logs for errors during finalization.")
 
-            # We need a sanitized version of video_title for the TXT filename,
-            # but the JSON and Google Drive upload might use the original or a differently sanitized one.
-            # Let's use the same sanitized name as the video for consistency for the TXT file.
-            # The output_video_path already uses a sanitized name from sanitize_filename(video_title) + ".mp4"
-
-            base_filename = os.path.splitext(os.path.basename(output_video_path))[0] # Extracts filename without .mp4
-            script_txt_filename = f"{base_filename}_script.txt"
-            script_txt_path = os.path.join(os.path.dirname(output_video_path), script_txt_filename)
-
-            try:
-                with open(script_txt_path, 'w', encoding='utf-8') as f_txt:
-                    f_txt.write(f"Title: {video_title}\n\nScript:\n{script}")
-                print(f"Saved Kokoro input script to TXT: {script_txt_path}")
-            except Exception as e:
-                print(f"Error saving script to TXT at {script_txt_path}: {e}")
-
-            # Now, proceed with uploads
-            print(f"\n--- Starting Upload Processes ---")
-
-            # Ensure 'script' (Kokoro input) and 'video_title' (original) are available here.
-            # 'output_video_path' is the full path to the generated .mp4 file.
-
-            # Call Telegram upload function (async)
-            # It's important that step_5f_send_to_telegram is defined as an async function
-            try:
-                print("\nAttempting to send to Telegram...")
-                await step_5f_send_to_telegram(
-                    video_path=output_video_path,
-                    video_title=video_title, # Original title for display
-                    script_text=script      # Kokoro input script
-                )
-                print("Telegram sending process completed.")
-            except Exception as e_telegram:
-                print(f"An error occurred during Telegram sending: {e_telegram}")
-
-            # Call Google Drive upload function (synchronous)
-            try:
-                print("\nAttempting to upload to Google Drive...")
-                step_5g_upload_to_google_drive(
-                    video_path=output_video_path,
-                    video_title_original=video_title, # Original title for .txt content
-                    script_text=script               # Kokoro input script
-                )
-                print("Google Drive upload process completed.")
-            except Exception as e_gdrive:
-                print(f"An error occurred during Google Drive upload: {e_gdrive}")
-
-            print(f"\n--- All Processes Attempted ---")
-
-        else:
-            print(f"\n--- Video Generation Failed ---")
-            print("Uploads will be skipped. Please check the logs for errors during finalization.")
-
-        # Cleanup for visual_clips is now handled within finalize_video's finally block.
-        # Cleanup for tts_output_path (if it's a temp file) or background_audio could be done here if needed,
-        # but background_audio (AudioFileClip) is also closed in finalize_video.
-        # If tts_output_path is a dummy file from Kokoro fallback, it might need cleanup.
-        # For now, assuming tts_output_path is managed elsewhere or persists.
+    # Cleanup for visual_clips is now handled within finalize_video's finally block.
+    # Cleanup for tts_output_path (if it's a temp file) or background_audio could be done here if needed,
+    # but background_audio (AudioFileClip) is also closed in finalize_video.
+    # If tts_output_path is a dummy file from Kokoro fallback, it might need cleanup.
+    # For now, assuming tts_output_path is managed elsewhere or persists.
 
     # Placeholder for future function calls using the resolution and script
     print("\nNext steps will process the video based on the provided script and resolution.")
